@@ -1,0 +1,664 @@
+﻿
+# Kubernetes 部署手册 - Official
+
+## 0.软件版本说明
+- 使用CentOS 7作为集群安装环境
+- 使用原生软件源（Yum）和Google官方镜像源（k8s.gcr.io）
+- 使用最新稳定版Kubernetes:v1.15.2（2019.8.6）作为集群部署版本
+- 由于国内对谷歌网络的限制，本手册使用VPS代理的方式进行
+### 0.1 系统及内核版本
+- 系统方面使用 CentOS7 7.6（1810），内核更新至 3.10.0-957.27.2.el7。
+
+| 序号  | 说明  | 版本号                                  | 查询方式                    |
+|-----|-----|--------------------------------------|-------------------------|
+| 1   | 系统  | CentOS Linux release 7.6.1810 (Core) | cat /etc/redhat-release | 
+| 2   | 内核  | 3.10.0-957.27.2.el7.x86_64           | uname -r                |
+### 0.2 安装软件版本
+- 容器运行时环境使用 Docker-CE 
+
+| 序号  | 软件名       | 软件版本号                   |
+|-----|-----------|-------------------------|
+| 1   | docker-ce | docker-ce-18.06.2.ce    |
+| 2   | kubeadm   | kubeadm-1.15.2-0.x86_64 |
+| 3   | kubelet   | kubelet-1.15.2-0.x86_64 |
+| 4   | kubectl   | kubectl-1.15.2-0.x86_64 |
+### 0.3 镜像版本
+| 序号  | 软件名                     | 软件版本号   | 镜像名                                         |
+|-----|-------------------------|---------|---------------------------------------------|
+| 1   | kube-apiserver          | v1.15.2 | k8s.gcr.io/kube-apiserver:v1.15.2｜          |
+| 2   | kube-controller-manager | v1.15.2 | k8s.gcr.io/kube-controller-manager:v1.15.2｜ |
+| 3   | kube-scheduler          | v1.15.2 | k8s.gcr.io/kube-scheduler:v1.15.2｜          |
+| 4   | kube-proxy              | v1.15.2 | k8s.gcr.io/kube-proxy:v1.15.2｜              |
+| 5   | pause                   | 3.1     | k8s.gcr.io/pause:3.1｜                       |
+| 6   | etcd                    | 3.3.10  | k8s.gcr.io/etcd:3.3.10｜                     |
+| 7   | coredns                 | 1.3.1   | k8s.gcr.io/coredns:1.3.1｜                   |
+
+### 0.4 部署说明
+- 不使用国内源，使用国内环境的会在后期更新一期使用国内源的教程
+- 注意手册的步骤1-3，倘若为虚拟机环境，只需在单台模板机进行即可；倘若为实体环境，主机名为localhost的为每台主机都需执行的步骤
+- 步骤1-3为基础环境的设置和集群软件的安装
+- 步骤4分为两个部分：一为主节点的初始化；二为node节点的添加
+##  1. 软件Yum源配置
+### 1.1 添加 docker-ce.repo
+#### 1.1.1 添加环境依赖
+```shell
+[root@localhost ~]# yum install yum-utils device-mapper-persistent-data lvm2
+```
+#### 1.1.2 添加docker源
+```shell
+[root@localhost ~]# yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+```
+### 1.2 添加 kubernetes.repo
+
+```shell
+[root@localhost ~]# cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+> [kubernetes]
+> name=Kubernetes
+> baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+> enabled=1
+> gpgcheck=1
+> repo_gpgcheck=1
+> gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+> EOF
+```
+
+### 1.3 更新缓存
+```shell
+[root@localhost ~]# yum clean all && yum makecache fast
+```
+### 1.4 查看YUM源信息
+
+```shell
+[root@localhost ~]# yum repolist
+Loaded plugins: fastestmirror
+Loading mirror speeds from cached hostfile
+ * base: mirrors.sonic.net
+ * epel: mirrors.sonic.net
+ * extras: mirrors.sonic.net
+ * updates: mirrors.sonic.net
+repo id                                                  repo name                                                                       status
+!base/7/x86_64                                           CentOS-7 - Base                                                                 10,019
+!docker-ce-stable/x86_64                                 Docker CE Stable - x86_64                                                           52
+!epel/x86_64                                             Extra Packages for Enterprise Linux 7 - x86_64                                  13,338
+!extras/7/x86_64                                         CentOS-7 - Extras                                                                  435
+!kubernetes                                              Kubernetes                                                                         385
+!updates/7/x86_64                                        CentOS-7 - Updates                                                               2,500
+repolist: 26,729
+```
+
+### 1.5 更新系统软件
+```shell
+[root@localhost ~]# yum update
+```
+
+## 2. docker 的安装与配置
+### 2.1 搜索可安装的docker-ce版本
+```shell
+[root@localhost ~]# yum list docker-ce --showduplicates | sort -r
+ * updates: mirrors.aliyun.com
+Loading mirror speeds from cached hostfile
+Loaded plugins: fastestmirror
+Installed Packages
+ * extras: mirrors.aliyun.com
+docker-ce.x86_64            3:19.03.1-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:19.03.1-3.el7                    @docker-ce-stable
+docker-ce.x86_64            3:19.03.0-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:18.09.8-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:18.09.7-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:18.09.6-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:18.09.5-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:18.09.4-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:18.09.3-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:18.09.2-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:18.09.1-3.el7                    docker-ce-stable 
+docker-ce.x86_64            3:18.09.0-3.el7                    docker-ce-stable 
+docker-ce.x86_64            18.06.3.ce-3.el7                   docker-ce-stable 
+docker-ce.x86_64            18.06.2.ce-3.el7                   docker-ce-stable 
+docker-ce.x86_64            18.06.1.ce-3.el7                   docker-ce-stable 
+docker-ce.x86_64            18.06.0.ce-3.el7                   docker-ce-stable 
+docker-ce.x86_64            18.03.1.ce-1.el7.centos            docker-ce-stable 
+docker-ce.x86_64            18.03.0.ce-1.el7.centos            docker-ce-stable 
+ * base: mirrors.aliyun.com
+Available Packages
+```
+### 2.2 安装 docker-ce
+```shell
+[root@localhost ~]#  yum install docker-ce-18.06.2.ce
+```
+### 2.3 创建 /etc/docker 文件夹
+```shell
+[root@localhost ~]# mkdir /etc/docker
+```
+### 2.4 配置docker守护进程
+```shell
+[root@localhost ~]# cat > /etc/docker/daemon.json <<EOF
+{
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m"
+  },
+  "storage-driver": "overlay2",
+  "storage-opts": [
+    "overlay2.override_kernel_check=true"
+  ]
+}
+EOF
+```
+### 2.5 创建docker配置文件目录
+```shell
+[root@localhost ~]# mkdir -p /etc/systemd/system/docker.service.d
+```
+
+### 2.6 配置Docker的https代理
+####  2.6.1 创建 Docker的https代理文件
+```shell
+[root@localhost ~]# vim /etc/systemd/system/docker.service.d/https-proxy.conf
+```
+####  2.6.2 编写 Docker的https代理文件
+```shell
+[Service]
+Environment="HTTPS_PROXY=http://127.0.0.1:8118" "NO_PROXY=localhost,172.16.0.0/16,192.168.0.0/16,127.0.0.1,10.10.0.0/16,192.168.1.0/24,10.96.0.0/12,10.244.0.0/16"
+```
+
+## 3. Kubernetes 的安装与配置
+### 3.1 安装 Kubernetes 的相关组件
+* **kubelet — Kubernetes节点代理**
+* **kubeadm — 一个用于多节点Kubernetes集群的部署工具**
+* **kubectl — 用于和Kubernetes交互的命令行工具**
+* **Kubernetes-cni — Kubernetes容器网络接口**
+```shell
+[root@localhost ~]# yum install -y kubelet kubeadm kubectl --disableexcludes=kubernetes
+```
+
+### 3.2 运行环境配置
+#### 3.2.1 禁用 SELinux
+```shell
+[root@localhost ~]# setenforce 0
+[root@localhost ~]# sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
+```
+#### 3.2.2 关闭防火墙
+```shell
+[root@localhost ~]# systemctl stop firewalld && systemctl disable firewalld
+```
+
+#### 3.2.3 启用内核选项
+```shell
+[root@localhost ~]# cat <<EOF >  /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+EOF
+[root@localhost ~]# sysctl --system
+```
+
+#### 3.2.4 禁用交换分区
+```shell
+[root@localhost ~]# swapoff -a && sed -i '/ swap / s/^/#/' /etc/fstab
+```
+### 3.3 运行 Docker-CE 和 Kubelet
+```shell
+[root@localhost ~]# systemctl start docker && systemctl enable docker
+Created symlink from /etc/systemd/system/multi-user.target.wants/docker.service to /usr/lib/systemd/system/docker.service.
+[root@localhost ~]# systemctl start kubelet && systemctl enable kubelet      
+Created symlink from /etc/systemd/system/multi-user.target.wants/kubelet.service to /usr/lib/systemd/system/kubelet.service.
+```
+
+## 4. 创建 Kubernetes 集群
+
+### 4.1 克隆虚拟机
+
+### 4.2 主机名与域名解析配置
+#### 4.2.1 配置主机名
+```shell
+[root@master ~]# hostnamectl --static set-hostname master.k8s
+[root@node1 ~]#  hostnamectl --static set-hostname node1.k8s
+[root@node2 ~]#  hostnamectl --static set-hostname node2.k8s
+```
+#### 4.2.2 配置hosts文件
+```shell
+[root@master ~]# cat /etc/hosts | grep k8s
+192.168.1.120 master.k8s
+192.168.1.121 node1.k8s
+192.168.1.122 node2.k8s
+```
+#### 4.2.3 分发hosts文件
+### 4.3 使用kubeadm配置主节点
+#### 4.3.1 查看镜像版本
+```shell
+[root@master ~]# kubeadm config images list    
+k8s.gcr.io/kube-apiserver:v1.15.2
+k8s.gcr.io/kube-controller-manager:v1.15.2
+k8s.gcr.io/kube-scheduler:v1.15.2
+k8s.gcr.io/kube-proxy:v1.15.2
+k8s.gcr.io/pause:3.1
+k8s.gcr.io/etcd:3.3.10
+k8s.gcr.io/coredns:1.3.1
+```
+#### 4.3.2 初始化主节点
+```shell
+[root@master ~]# kubeadm init --pod-network-cidr=10.244.0.0/16
+[init] Using Kubernetes version: v1.15.2
+[preflight] Running pre-flight checks
+[preflight] Pulling images required for setting up a Kubernetes cluster
+[preflight] This might take a minute or two, depending on the speed of your internet connection
+[preflight] You can also perform this action in beforehand using 'kubeadm config images pull'
+[kubelet-start] Writing kubelet environment file with flags to file "/var/lib/kubelet/kubeadm-flags.env"
+[kubelet-start] Writing kubelet configuration to file "/var/lib/kubelet/config.yaml"
+[kubelet-start] Activating the kubelet service
+[certs] Using certificateDir folder "/etc/kubernetes/pki"
+[certs] Generating "etcd/ca" certificate and key
+[certs] Generating "etcd/server" certificate and key
+[certs] etcd/server serving cert is signed for DNS names [master.k8s localhost] and IPs [192.168.1.120 127.0.0.1 ::1]
+[certs] Generating "etcd/peer" certificate and key
+[certs] etcd/peer serving cert is signed for DNS names [master.k8s localhost] and IPs [192.168.1.120 127.0.0.1 ::1]
+[certs] Generating "apiserver-etcd-client" certificate and key
+[certs] Generating "etcd/healthcheck-client" certificate and key
+[certs] Generating "front-proxy-ca" certificate and key
+[certs] Generating "front-proxy-client" certificate and key
+[certs] Generating "ca" certificate and key
+[certs] Generating "apiserver" certificate and key
+[certs] apiserver serving cert is signed for DNS names [master.k8s kubernetes kubernetes.default kubernetes.default.svc kubernetes.default.svc.cluster.local] and IPs [10.96.0.1 192.168.1.120]
+[certs] Generating "apiserver-kubelet-client" certificate and key
+[certs] Generating "sa" key and public key
+[kubeconfig] Using kubeconfig folder "/etc/kubernetes"
+[kubeconfig] Writing "admin.conf" kubeconfig file
+[kubeconfig] Writing "kubelet.conf" kubeconfig file
+[kubeconfig] Writing "controller-manager.conf" kubeconfig file
+[kubeconfig] Writing "scheduler.conf" kubeconfig file
+[control-plane] Using manifest folder "/etc/kubernetes/manifests"
+[control-plane] Creating static Pod manifest for "kube-apiserver"
+[control-plane] Creating static Pod manifest for "kube-controller-manager"
+[control-plane] Creating static Pod manifest for "kube-scheduler"
+[etcd] Creating static Pod manifest for local etcd in "/etc/kubernetes/manifests"
+[wait-control-plane] Waiting for the kubelet to boot up the control plane as static Pods from directory "/etc/kubernetes/manifests". This can take up to 4m0s
+[apiclient] All control plane components are healthy after 36.502117 seconds
+[upload-config] Storing the configuration used in ConfigMap "kubeadm-config" in the "kube-system" Namespace
+[kubelet] Creating a ConfigMap "kubelet-config-1.15" in namespace kube-system with the configuration for the kubelets in the cluster
+[upload-certs] Skipping phase. Please see --upload-certs
+[mark-control-plane] Marking the node master.k8s as control-plane by adding the label "node-role.kubernetes.io/master=''"
+[mark-control-plane] Marking the node master.k8s as control-plane by adding the taints [node-role.kubernetes.io/master:NoSchedule]
+[bootstrap-token] Using token: cnhznp.403fesvif10ngxj5
+[bootstrap-token] Configuring bootstrap tokens, cluster-info ConfigMap, RBAC Roles
+[bootstrap-token] configured RBAC rules to allow Node Bootstrap tokens to post CSRs in order for nodes to get long term certificate credentials
+[bootstrap-token] configured RBAC rules to allow the csrapprover controller automatically approve CSRs from a Node Bootstrap Token
+[bootstrap-token] configured RBAC rules to allow certificate rotation for all node client certificates in the cluster
+[bootstrap-token] Creating the "cluster-info" ConfigMap in the "kube-public" namespace
+[addons] Applied essential addon: CoreDNS
+[addons] Applied essential addon: kube-proxy
+Your Kubernetes control-plane has initialized successfully!
+
+To start using your cluster, you need to run the following as a regular user:
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+You should now deploy a pod network to the cluster.
+Run "kubectl apply -f [podnetwork].yaml" with one of the options listed at:
+  https://kubernetes.io/docs/concepts/cluster-administration/addons/
+  
+Then you can join any number of worker nodes by running the following on each as root:
+kubeadm join 192.168.1.120:6443 --token cnhznp.403fesvif10ngxj5 \
+    --discovery-token-ca-cert-hash sha256:9624c1afaddcd196bd54db10a2bbeb1831b3a90bc2e78e60a87d80a705b8152c
+```
+#### 4.3.3 记录node节点添加命令
+```
+kubeadm join 192.168.1.120:6443 --token cnhznp.403fesvif10ngxj5 \
+    --discovery-token-ca-cert-hash sha256:9624c1afaddcd196bd54db10a2bbeb1831b3a90bc2e78e60a87d80a705b8152c
+```
+#### 4.3.4 安装pod网络组件
+- **在安装网络组件前，需设置kubernetes的配置**
+- **在需要运行的节点需要添加环境变量**
+```shell
+[root@master ~]# export KUBECONFIG=/etc/kubernetes/admin.conf
+```
+- **安装flannel组件**
+```shell
+[root@master ~]# kubectl apply -f kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+podsecuritypolicy.extensions/psp.flannel.unprivileged created
+clusterrole.rbac.authorization.k8s.io/flannel created
+clusterrolebinding.rbac.authorization.k8s.io/flannel created
+serviceaccount/flannel created
+configmap/kube-flannel-cfg created
+daemonset.extensions/kube-flannel-ds-amd64 created
+daemonset.extensions/kube-flannel-ds-arm64 created
+daemonset.extensions/kube-flannel-ds-arm created
+daemonset.extensions/kube-flannel-ds-ppc64le created
+daemonset.extensions/kube-flannel-ds-s390x created
+```
+
+### 4.4 使用kubeadm添加Node节点
+```shell
+[root@node2 ~]# kubeadm join 192.168.1.120:6443 --token s08bi7.rlwtqt13re2rqqv9 --discovery-token-ca-cert-hash sha256:502ae2443340c55da4959192289d3d792eae89fa4af56115c9ca9aa5e4797820  
+[preflight] Running pre-flight checks
+[preflight] Reading configuration from the cluster...
+[preflight] FYI: You can look at this config file with 'kubectl -n kube-system get cm kubeadm-config -oyaml'
+[kubelet-start] Downloading configuration for the kubelet from the "kubelet-config-1.15" ConfigMap in the kube-system namespace
+[kubelet-start] Writing kubelet configuration to file "/var/lib/kubelet/config.yaml"
+[kubelet-start] Writing kubelet environment file with flags to file "/var/lib/kubelet/kubeadm-flags.env"
+[kubelet-start] Activating the kubelet service
+[kubelet-start] Waiting for the kubelet to perform the TLS Bootstrap...
+
+This node has joined the cluster:
+* Certificate signing request was sent to apiserver and a response was received.
+* The Kubelet was informed of the new secure connection details.
+
+Run 'kubectl get nodes' on the control-plane to see this node join the cluster.
+```
+
+### 4.5 配置与使用 kubectl
+- **如果需要运行kubectl，在需要运行的节点需要添加环境变量**
+```shell
+[root@master ~]# export KUBECONFIG=/etc/kubernetes/admin.conf
+```
+- **查询所有节点信息**
+```
+[root@master ~]# kubectl get nodes
+NAME         STATUS   ROLES    AGE   VERSION
+master.k8s   Ready    master   26h   v1.15.2
+node1.k8s    Ready    <none>   26h   v1.15.2
+node2.k8s    Ready    <none>   26h   v1.15.2
+```
+- **查询 kube-system Pod中所有容器信息**
+```
+[root@master ~]# kubectl get pods -n kube-system -o wide
+NAME                                 READY   STATUS    RESTARTS   AGE   IP              NODE         NOMINATED NODE   READINESS GATES
+coredns-5c98db65d4-589l6             1/1     Running   0          26h   10.244.2.2      node2.k8s    <none>           <none>
+coredns-5c98db65d4-7t6cw             1/1     Running   0          26h   10.244.0.2      master.k8s   <none>           <none>
+etcd-master.k8s                      1/1     Running   0          26h   192.168.1.120   master.k8s   <none>           <none>
+kube-apiserver-master.k8s            1/1     Running   0          26h   192.168.1.120   master.k8s   <none>           <none>
+kube-controller-manager-master.k8s   1/1     Running   0          26h   192.168.1.120   master.k8s   <none>           <none>
+kube-flannel-ds-amd64-cwtsv          1/1     Running   0          26h   192.168.1.122   node2.k8s    <none>           <none>
+kube-flannel-ds-amd64-p894g          1/1     Running   0          26h   192.168.1.120   master.k8s   <none>           <none>
+kube-flannel-ds-amd64-vg2tl          1/1     Running   0          26h   192.168.1.121   node1.k8s    <none>           <none>
+kube-proxy-2cdxd                     1/1     Running   0          26h   192.168.1.120   master.k8s   <none>           <none>
+kube-proxy-5pfcq                     1/1     Running   0          26h   192.168.1.121   node1.k8s    <none>           <none>
+kube-proxy-rgrjc                     1/1     Running   0          26h   192.168.1.122   node2.k8s    <none>           <none>
+kube-scheduler-master.k8s            1/1     Running   0          26h   192.168.1.120   master.k8s   <none>           <none>
+```
+- **使用描述查看节点详细信息**
+```shell
+[root@master ~]# kubectl describe node master.k8s
+Name:               master.k8s
+Roles:              master
+Labels:             beta.kubernetes.io/arch=amd64
+                    beta.kubernetes.io/os=linux
+                    kubernetes.io/arch=amd64
+                    kubernetes.io/hostname=master.k8s
+                    kubernetes.io/os=linux
+                    node-role.kubernetes.io/master=
+Annotations:        flannel.alpha.coreos.com/backend-data: {"VtepMAC":"3a:af:26:95:3d:7d"}
+                    flannel.alpha.coreos.com/backend-type: vxlan
+                    flannel.alpha.coreos.com/kube-subnet-manager: true
+                    flannel.alpha.coreos.com/public-ip: 192.168.1.120
+                    kubeadm.alpha.kubernetes.io/cri-socket: /var/run/dockershim.sock
+                    node.alpha.kubernetes.io/ttl: 0
+                    volumes.kubernetes.io/controller-managed-attach-detach: true
+CreationTimestamp:  Wed, 07 Aug 2019 01:12:44 -0400
+Taints:             node-role.kubernetes.io/master:NoSchedule
+Unschedulable:      false
+Conditions:
+  Type             Status  LastHeartbeatTime                 LastTransitionTime                Reason                       Message
+  ----             ------  -----------------                 ------------------                ------                       -------
+  MemoryPressure   False   Thu, 08 Aug 2019 04:17:54 -0400   Wed, 07 Aug 2019 01:12:40 -0400   KubeletHasSufficientMemory   kubelet has sufficient memory available
+  DiskPressure     False   Thu, 08 Aug 2019 04:17:54 -0400   Wed, 07 Aug 2019 01:12:40 -0400   KubeletHasNoDiskPressure     kubelet has no disk pressure
+  PIDPressure      False   Thu, 08 Aug 2019 04:17:54 -0400   Wed, 07 Aug 2019 01:12:40 -0400   KubeletHasSufficientPID      kubelet has sufficient PID available
+  Ready            True    Thu, 08 Aug 2019 04:17:54 -0400   Wed, 07 Aug 2019 01:15:04 -0400   KubeletReady                 kubelet is posting ready status
+Addresses:
+  InternalIP:  192.168.1.120
+  Hostname:    master.k8s
+Capacity:
+ cpu:                4
+ ephemeral-storage:  17394Mi
+ hugepages-2Mi:      0
+ memory:             3880148Ki
+ pods:               110
+Allocatable:
+ cpu:                4
+ ephemeral-storage:  16415037823
+ hugepages-2Mi:      0
+ memory:             3777748Ki
+ pods:               110
+System Info:
+ Machine ID:                 43c8befc66d54d21aed379c82e8dfc8d
+ System UUID:                43C8BEFC-66D5-4D21-AED3-79C82E8DFC8D
+ Boot ID:                    021e0274-f19e-4fda-842a-0a528163e178
+ Kernel Version:             3.10.0-957.27.2.el7.x86_64
+ OS Image:                   CentOS Linux 7 (Core)
+ Operating System:           linux
+ Architecture:               amd64
+ Container Runtime Version:  docker://18.6.2
+ Kubelet Version:            v1.15.2
+ Kube-Proxy Version:         v1.15.2
+PodCIDR:                     10.244.0.0/24
+Non-terminated Pods:         (7 in total)
+  Namespace                  Name                                  CPU Requests  CPU Limits  Memory Requests  Memory Limits  AGE
+  ---------                  ----                                  ------------  ----------  ---------------  -------------  ---
+  kube-system                coredns-5c98db65d4-7t6cw              100m (2%)     0 (0%)      70Mi (1%)        170Mi (4%)     27h
+  kube-system                etcd-master.k8s                       0 (0%)        0 (0%)      0 (0%)           0 (0%)         27h
+  kube-system                kube-apiserver-master.k8s             250m (6%)     0 (0%)      0 (0%)           0 (0%)         27h
+  kube-system                kube-controller-manager-master.k8s    200m (5%)     0 (0%)      0 (0%)           0 (0%)         27h
+  kube-system                kube-flannel-ds-amd64-p894g           100m (2%)     100m (2%)   50Mi (1%)        50Mi (1%)      27h
+  kube-system                kube-proxy-2cdxd                      0 (0%)        0 (0%)      0 (0%)           0 (0%)         27h
+  kube-system                kube-scheduler-master.k8s             100m (2%)     0 (0%)      0 (0%)           0 (0%)         27h
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.)
+  Resource           Requests    Limits
+  --------           --------    ------
+  cpu                750m (18%)  100m (2%)
+  memory             120Mi (3%)  220Mi (5%)
+  ephemeral-storage  0 (0%)      0 (0%)
+Events:              <none>
+```
+
+---
+## 附录	
+### 附录[1].排错
+#### [1] 未进行代理隔离
+- **初始化节点的时候遇到HTTPProxy代理的错误**
+- **因为使用VPS代理的方式，所以会用到http和https的代理。**
+- **但是需要注意的是，启用privoxy.service代理前，需要在环境变量中添加no_proxy参数，参数包括集群宿主机节点管理平面网段和集群内部所使用的的pod网络**
+- 主机节点未进行代理隔离 
+```shell
+[root@master ~]# kubeadm init
+[init] Using Kubernetes version: v1.15.2
+[preflight] Running pre-flight checks
+        [WARNING HTTPProxy]: Connection to "https://192.168.1.120" uses proxy "http://127.0.0.1:8118". If that is not intended, adjust your proxy settings
+[preflight] If you know what you are doing, you can make a check non-fatal with `--ignore-preflight-errors=...`
+```
+- service-cidr网络未进行代理隔离
+```shell
+[root@master ~]# kubeadm init
+[init] Using Kubernetes version: v1.15.2
+[preflight] Running pre-flight checks
+        [WARNING HTTPProxyCIDR]: connection to "10.96.0.0/12" uses proxy "http://127.0.0.1:8118". This may lead to malfunctional cluster setup. Make sure that Pod and Services IP ranges specified correctly as exceptions in proxy configuration
+[preflight] If you know what you are doing, you can make a check non-fatal with `--ignore-preflight-errors=...`
+```
+- 解决方案：添加所有节点profile文件中的no_proxy参数
+```shell
+[root@master ~]# vim /etc/profile
+export no_proxy=localhost,172.16.0.0/16,192.168.0.0/16,127.0.0.1,10.10.0.0/16,192.168.1.0/24,10.96.0.0/12,10.244.0.0/16
+```
+
+#### [2] docker服务未设置为开机自启
+```shell
+[root@master ~]# kubeadm init
+[init] Using Kubernetes version: v1.15.2
+[preflight] Running pre-flight checks
+        [WARNING Service-Docker]: docker service is not enabled, please run 'systemctl enable docker.service'
+error execution phase preflight: 
+[preflight] If you know what you are doing, you can make a check non-fatal with `--ignore-preflight-errors=...`
+```
+- 解决方案：设置开机自启
+
+```shell
+[root@master ~]# systemctl enable docker
+Created symlink from /etc/systemd/system/multi-user.target.wants/docker.service to /usr/lib/systemd/system/docker.service.
+```
+#### [3] 交换分区Swap未关闭
+```shell
+[root@master ~]# kubeadm init
+[init] Using Kubernetes version: v1.15.2
+[preflight] Running pre-flight checks
+error execution phase preflight: [preflight] Some fatal errors occurred:
+        [ERROR Swap]: running with swap on is not supported. Please disable swap
+[preflight] If you know what you are doing, you can make a check non-fatal with `--ignore-preflight-errors=...`
+```
+- 解决方案：关闭所有节点的swap
+```shell
+[root@master ~]# swapoff -a && sed -i '/ swap / s/^/#/' /etc/fstab
+```
+
+#### [4] coredns 一直显示为Pending，并且没有获取到IP
+```
+[root@master ~]# kubectl get pods --all-namespaces
+NAMESPACE     NAME                                 READY   STATUS     RESTARTS   AGE
+kube-system   coredns-5c98db65d4-nbrcb             0/1     Pending    0          11m
+kube-system   coredns-5c98db65d4-vztj8             0/1     Pending    0          11m
+kube-system   etcd-master.k8s                      1/1     Running    1          9m48s
+kube-system   kube-apiserver-master.k8s            1/1     Running    1          9m49s
+kube-system   kube-controller-manager-master.k8s   1/1     Running    1          10m
+kube-system   kube-flannel-ds-amd64-bt8pd          0/1     Init:0/1   0          53s
+kube-system   kube-proxy-n8lbq                     1/1     Running    1          11m
+kube-system   kube-scheduler-master.k8s            1/1     Running    1          9m52s
+```
+- 解决方案：重置集群，并在初始化集群时添加 “--pod-network-cidr=10.244.0.0/16” 参数
+```shell
+[root@master ~]# kubeadm init --pod-network-cidr=10.244.0.0/16
+```
+
+#### [5] node节点为就绪
+- node节点的状态一直显示为 NotReady
+```
+[root@master ~]# kubectl get nodes
+NAME         STATUS     ROLES    AGE   VERSION
+master.k8s   Ready      master   14m   v1.15.2
+node1.k8s    NotReady   <none>   9s    v1.15.2
+node2.k8s    NotReady   <none>   37s   v1.15.2
+```
+- 并且node节点的容器镜像未获取到，正常获取完成的如下所示
+- 未就绪的原因是因为pod网络组件镜像未获取到而导致的，pod网络组件镜像如下 quay.io/coreos/flannel
+```shell
+[root@node1 ~]# docker image list
+REPOSITORY               TAG                 IMAGE ID            CREATED             SIZE
+k8s.gcr.io/kube-proxy    v1.15.2             167bbf6c9338        2 days ago          82.4MB
+quay.io/coreos/flannel   v0.11.0-amd64       ff281650a721        6 months ago        52.6MB
+k8s.gcr.io/pause         3.1                 da86e6ba6ca1        19 months ago       742kB
+```
+
+- 解决方案：（1）检查privoxy代理是否正常、（2）代理中是否设置了no_proxy参数、（3）docker中是否添加了https代理
+
+#### [6] 未设置ipv4转发
+```shell
+[root@master ~]# kubeadm init --pod-network-cidr=10.244.0.0/16
+[init] Using Kubernetes version: v1.15.2
+[preflight] Running pre-flight checks
+error execution phase preflight: [preflight] Some fatal errors occurred:
+        [ERROR FileContent--proc-sys-net-ipv4-ip_forward]: /proc/sys/net/ipv4/ip_forward contents are not set to 1
+```
+- 解决方案：
+
+```shell
+[root@master ~]# sysctl -w net.ipv4.ip_forward=1
+net.ipv4.ip_forward = 1
+```
+
+#### [7] 未设置ipv4转发
+```shell
+[root@master ~]# kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/62e44c867a2846fefb68bd5f178daf4da3095ccb/Documentation/kube-flannel.yml
+unable to recognize "https://raw.githubusercontent.com/coreos/flannel/62e44c867a2846fefb68bd5f178daf4da3095ccb/Documentation/kube-flannel.yml": Get http://localhost:8080/api?timeout=32s: dial tcp [::1]:8080: connect: connection refused
+unable to recognize "https://raw.githubusercontent.com/coreos/flannel/62e44c867a2846fefb68bd5f178daf4da3095ccb/Documentation/kube-flannel.yml": Get http://localhost:8080/api?timeout=32s: dial tcp [::1]:8080: connect: connection refused
+unable to recognize "https://raw.githubusercontent.com/coreos/flannel/62e44c867a2846fefb68bd5f178daf4da3095ccb/Documentation/kube-flannel.yml": Get http://localhost:8080/api?timeout=32s: dial tcp [::1]:8080: connect: connection refused
+```
+- 解决方案：
+- 在安装网络组件前，需设置kubernetes的配置
+- 在需要运行的节点需要添加环境变量
+```shell
+[root@master ~]# export KUBECONFIG=/etc/kubernetes/admin.conf
+```
+- 随后再安装flannel组件
+```shell
+[root@master ~]# kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/62e44c867a2846fefb68bd5f178daf4da3095ccb/Documentation/kube-flannel.yml
+podsecuritypolicy.extensions/psp.flannel.unprivileged created
+clusterrole.rbac.authorization.k8s.io/flannel created
+clusterrolebinding.rbac.authorization.k8s.io/flannel created
+serviceaccount/flannel created
+configmap/kube-flannel-cfg created
+daemonset.extensions/kube-flannel-ds-amd64 created
+daemonset.extensions/kube-flannel-ds-arm64 created
+daemonset.extensions/kube-flannel-ds-arm created
+daemonset.extensions/kube-flannel-ds-ppc64le created
+daemonset.extensions/kube-flannel-ds-s390x created
+```
+
+
+
+
+### 附录[2].重置集群
+- 在安装的过程中不可避免会出现配置出错的为题，因此在配置出错的时候需使用以下步骤来初始化Kubernetes环境
+- 排除已添加的节点node1.k8s、node2.k8s、master.k8s
+```shell
+[root@master ~]# kubectl drain node1.k8s --delete-local-data --force --ignore-daemonsets 
+node/node1.k8s cordoned
+WARNING: ignoring DaemonSet-managed Pods: kube-system/kube-flannel-ds-amd64-4zr9t, kube-system/kube-proxy-z2w5w
+node/node1.k8s drained
+[root@master ~]# kubectl drain node2.k8s --delete-local-data --force --ignore-daemonsets           
+node/node2.k8s cordoned
+WARNING: ignoring DaemonSet-managed Pods: kube-system/kube-flannel-ds-amd64-r6l89, kube-system/kube-proxy-lpdgz
+node/node2.k8s drained
+[root@master ~]# kubectl drain master.k8s --delete-local-data --force --ignore-daemonsets     
+node/master.k8s cordoned
+WARNING: ignoring DaemonSet-managed Pods: kube-system/kube-flannel-ds-amd64-bt8pd, kube-system/kube-proxy-n8lbq
+evicting pod "coredns-5c98db65d4-nbrcb"
+evicting pod "coredns-5c98db65d4-vztj8"
+pod/coredns-5c98db65d4-nbrcb evicted
+pod/coredns-5c98db65d4-vztj8 evicted
+node/master.k8s evicted
+```
+- 查看排除后的节点情况
+```shell
+[root@master ~]# kubectl get nodes
+NAME         STATUS                     ROLES    AGE   VERSION
+master.k8s   Ready,SchedulingDisabled   master   10h   v1.15.2
+node1.k8s    Ready,SchedulingDisabled   <none>   10h   v1.15.2
+node2.k8s    Ready,SchedulingDisabled   <none>   10h   v1.15.2
+```
+- 删除节点
+```shell
+[root@master ~]# kubectl delete node node2.k8s node1.k8s  master.k8s
+node "node2.k8s" deleted
+node "node1.k8s" deleted
+node "master.k8s" deleted
+```
+
+- 使用kubeadm工具的reset工具重置集群环境
+```shell
+[root@master ~]# kubeadm reset
+[reset] Reading configuration from the cluster...
+[reset] FYI: You can look at this config file with 'kubectl -n kube-system get cm kubeadm-config -oyaml'
+W0807 00:59:18.003864   14492 reset.go:98] [reset] Unable to fetch the kubeadm-config ConfigMap from cluster: failed to get node registration: failed to get corresponding node: nodes "master.k8s" not found
+[reset] WARNING: Changes made to this host by 'kubeadm init' or 'kubeadm join' will be reverted.
+[reset] Are you sure you want to proceed? [y/N]: y
+[preflight] Running pre-flight checks
+W0807 00:59:20.056468   14492 removeetcdmember.go:79] [reset] No kubeadm config, using etcd pod spec to get data directory
+[reset] Stopping the kubelet service
+[reset] Unmounting mounted directories in "/var/lib/kubelet"
+[reset] Deleting contents of config directories: [/etc/kubernetes/manifests /etc/kubernetes/pki]
+[reset] Deleting files: [/etc/kubernetes/admin.conf /etc/kubernetes/kubelet.conf /etc/kubernetes/bootstrap-kubelet.conf /etc/kubernetes/controller-manager.conf /etc/kubernetes/scheduler.conf]
+[reset] Deleting contents of stateful directories: [/var/lib/etcd /var/lib/kubelet /etc/cni/net.d /var/lib/dockershim /var/run/kubernetes]
+
+The reset process does not reset or clean up iptables rules or IPVS tables.
+If you wish to reset iptables, you must do so manually.
+For example:
+iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -X
+
+If your cluster was setup to utilize IPVS, run ipvsadm --clear (or similar)
+to reset your system's IPVS tables.
+
+The reset process does not clean your kubeconfig files and you must remove them manually.
+Please, check the contents of the $HOME/.kube/config file.
+```
+- 重置所有主机节点的iptables规则
+```shell
+iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -X
+```
+- 至此，集群初始化完成
+
